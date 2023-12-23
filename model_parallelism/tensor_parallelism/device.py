@@ -1,11 +1,10 @@
 """Virtual compute cluster."""
 
-# This lab is inspired by
-# https://irhum.github.io/blog/pjit/#intro-parallelism
-
-from multiprocessing import Process, Queue
+import logging
 import time
-from typing import Any, Callable, Optional, Sequence, Tuple
+from logging.handlers import QueueHandler, QueueListener
+from multiprocessing import Process, Queue
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 
@@ -61,6 +60,10 @@ class VirtualDevice:
     def index(self) -> MeshIndex:
         return self._index
 
+    def log(self, fmt, *args):
+        prefix = f'{self}: '
+        logging.info(prefix + fmt, *args)
+
     def __str__(self) -> str:
         return f'VirtualDevice({self._index})'
 
@@ -69,7 +72,7 @@ class VirtualDevice:
 
     def all_scatter(self, shard: np.ndarray,
                     group_id_fn: GroupIDFnType) -> None:
-        print(f'AllScatter request at {self._index}')
+        self.log(f'AllScatter request start.')
 
         # In practice, should do in parallel instead of using loops.
         src = self._index
@@ -79,8 +82,10 @@ class VirtualDevice:
                 continue
             if group_id != group_id_fn(dst):
                 continue
-            print(f'Scatter {src} to {dst}')
+            self.log('Scatter %s to %s.', src, dst)
             self._channels.send(src=src, dst=dst, data=shard)
+
+        self.log(f'AllScatter request finish.')
 
     # Scatter is used to implement gather, as the Queue works in a push mode
     # instead of a pull mode.
@@ -108,7 +113,7 @@ class VirtualDevice:
     # instead of a pull mode.
     def all_reduce(self, shard: np.ndarray, reduce_fn: ReduceFnType,
                    group_id_fn: GroupIDFnType) -> np.ndarray:
-        print(f'AllReduce request at {self._index}')
+        self.log(f'AllReduce request start.')
 
         # 1. Send out owned shard.
         self.all_scatter(shard, group_id_fn)
@@ -122,27 +127,65 @@ class VirtualDevice:
                 continue
             if src == dst:
                 continue
-            print(f'Reduce {src} with {dst}')
+            self.log(f'Reduce %s with %s', src, dst)
             reduced = reduce_fn(reduced,
                                 self._channels.receive(src=src, dst=dst))
 
+        self.log(f'AllReduce request finish.')
         return reduced
 
 
-def run_op_with_shared_inputs(op, device_, channels):
-    index = device_.index
-    print(f'Getting inputs on {device_}')
-    # Use the special channel as client->worker communication
-    inputs = channels.receive(None, index)
-    print(f'Running op on {device_}')
-    outputs = device_.run(op, *inputs)
-    print(f'Sending output on {device_}')
-    channels.send(index, None, outputs)
+def init_queue_listener(q: Queue):
+    # Main process handler.
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(levelname)s: %(asctime)s - %(process)s - %(message)s"))
+
+    # Main process logger.
+    logger = logging.getLogger('VirtualCluster')
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    # ql gets records from the queue and sends them to the handler
+    ql = QueueListener(q, handler)
+    ql.start()
+
+    return ql
+
+
+def init_queue_handler(q: Queue):
+    # Sub-process handler.
+    queue_handler = QueueHandler(q)
+
+    # Sub-process logger.
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(queue_handler)
 
 
 def format_slices(slices: Sequence[slice]) -> str:
     assert all(s.step is None for s in slices)
     return ', '.join(f'{s.start}:{s.stop}' for s in slices)
+
+
+def format_arrays(arrays: Sequence[np.ndarray] | np.ndarray) -> str:
+    if isinstance(arrays, np.ndarray):
+        arrays = [arrays]
+    return ', '.join(map(lambda a: str(a.shape), arrays))
+
+
+def run_op_with_shared_inputs(op, device, channels, logger_queue):
+    init_queue_handler(logger_queue)
+
+    index = device.index
+    # Use the special channel as client->worker communication
+    device.log('Getting inputs!')
+    inputs = channels.receive(None, index)
+    device.log('Running op %s!', op)
+    outputs = device.run(op, *inputs)
+    device.log('Sending outputs %s!', format_arrays(outputs))
+    channels.send(index, None, outputs)
 
 
 def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
@@ -160,8 +203,8 @@ def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
             stop = start + shard_size_1
             slices.append(slice(start, stop))
         # YAPF crashed if using tensor[*slices]
-        print(f'Device: {index} get shared input {i}: '
-              f'[{format_slices(slices)}]')
+        logging.info(f'Device: {index} get shared input {i}: '
+                     f'[{format_slices(slices)}]')
         shards.append(tensor.__getitem__(tuple(slices)))
         # shards = tensor[*slices]
     return shards
@@ -172,17 +215,24 @@ class VirtualCluster:
     def __init__(self, x_dim: int, y_dim: int):
         self._mesh = Mesh(x_dim=x_dim, y_dim=y_dim)
         self._channels = VirtualChannels(self._mesh)
+        self._logger_queue = Queue()
+        self._logger_queue_listener = init_queue_listener(self._logger_queue)
         self._devices = [
             VirtualDevice(index=index,
                           mesh=self._mesh,
                           channels=self._channels) for index in self._mesh
         ]
 
+    def __del__(self):
+        self._logger_queue_listener.stop()
+
     def run(self, op: Op, tensors: Sequence[np.ndarray],
             shardings: Sequence[TensorSharding]):
+
         processes = [
             Process(target=run_op_with_shared_inputs,
-                    args=(op, d, self._channels)) for d in self._devices
+                    args=(op, d, self._channels, self._logger_queue))
+            for d in self._devices
         ]
 
         for p in processes:
@@ -200,7 +250,7 @@ class VirtualCluster:
             outputs.append(self._channels.receive(index, None))
         end = time.time()
 
-        print(f'End to end time: {end - start}')
+        logging.info(f'End to end time: {end - start}')
 
         for p in processes:
             p.join()

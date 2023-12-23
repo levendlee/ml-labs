@@ -33,8 +33,8 @@ class InnerShardedMatMul(Op):
 
         c = np.matmul(a, b)
 
-        print(f'Virtual device ({device}) ran matmul '
-              f'{a.shape} @ {b.shape} -> {c.shape}!')
+        device.log('Virtual device (%s) ran matmul %s @ %s -> %s!', device,
+                   a.shape, b.shape, c.shape)
 
         def group_id_fn(index: MeshIndex):
             return ((index.x // self._inner_sharding.x_shard),
