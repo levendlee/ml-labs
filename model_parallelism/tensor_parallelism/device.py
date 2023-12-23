@@ -196,11 +196,14 @@ def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
         slices = []
         for dim, dim_sharding in zip(tensor.shape, tensor_sharding.dim_shards):
             assert dim % dim_sharding.num_shards == 0
-            shard_size_0 = dim // dim_sharding.num_shards
-            shard_size_1 = shard_size_0 // dim_sharding.x_shard
-            # When the mesh can hold more than shards, duplicates happens.
-            start = (index.x * shard_size_0 + index.y * shard_size_1) % dim
-            stop = start + shard_size_1
+            shard_size = dim // dim_sharding.num_shards
+            shard_index = (index.x %
+                           dim_sharding.x_shard) * dim_sharding.y_shard + (
+                               index.y % dim_sharding.y_shard)
+            # When the mesh is not sharded along a dimension, duplicates
+            # happens.
+            start = shard_index * shard_size
+            stop = start + shard_size
             slices.append(slice(start, stop))
         # YAPF crashed if using tensor[*slices]
         logging.info(f'Device: {index} get shared input {i}: '

@@ -32,8 +32,8 @@ def _run_test(tensor_shardings: Sequence[TensorSharding]):
         np.testing.assert_allclose(tensor, output_tensor, atol=1e-4, rtol=1e-4)
 
 
-def test_no_sharing():
-    # Runs 4.61s on MacbookPro 2018 13inch i7
+def test_no_sharding():
+    # Runs 3.77s on MacbookPro 2018 13inch i7
     # No sharding. 8x duplicated memory and compute.
     tensor_shardings = [
         TensorSharding([DimSharding(1, 1) for _ in range(2)]) for _ in range(3)
@@ -42,11 +42,11 @@ def test_no_sharing():
 
 
 @pytest.mark.parametrize(['x_shard', 'y_shard'], [(1, 4), (2, 1), (2, 4)])
-def test_matched_inner_sharing(x_shard, y_shard):
-    # Runs 7s on MacbookPro 2018 13inch i7
+def test_matched_inner_sharding(x_shard, y_shard):
+    # 1x4: Runs 4.19s on MacbookPro 2018 13inch i7
+    # 2x1: Runs 3.59s on MacbookPro 2018 13inch i7
+    # 2x4: Runs 7.10s on MacbookPro 2018 13inch i7
 
-    # Matched inner sharding on y dimension.
-    # 2x duplicated memory and compute.
     # Runs `AllReduce`.
     tensor_shardings = [
         TensorSharding([DimSharding(1, 1),
