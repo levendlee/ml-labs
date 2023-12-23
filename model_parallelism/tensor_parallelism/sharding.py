@@ -34,7 +34,7 @@ class TensorSharding(Sharding):
     dim_shards: Sequence[DimSharding]
 
     def __getitem__(self, index: int) -> DimSharding:
-      return self.dim_shards[index]
+        return self.dim_shards[index]
 
     @property
     def full(self) -> bool:

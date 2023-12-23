@@ -1,4 +1,4 @@
-"""Shared matrix multiplication."""
+"""Virtual compute cluster."""
 
 # This lab is inspired by
 # https://irhum.github.io/blog/pjit/#intro-parallelism
@@ -26,23 +26,26 @@ class VirtualChannels:
         self._h2d_channels = [Queue() for _ in range(num_devices)]
         self._d2h_channels = [Queue() for _ in range(num_devices)]
         self._d2d_channels = [[Queue() for _ in range(num_devices)]
-                          for _ in range(num_devices)]
+                              for _ in range(num_devices)]
 
     def to_1d(self, index: MeshIndex) -> int:
         return index.x * self._mesh.y_dim + index.y
 
-    def get_channel(self, src: Optional[MeshIndex], dst: Optional[MeshIndex]) -> Queue:
+    def get_channel(self, src: Optional[MeshIndex],
+                    dst: Optional[MeshIndex]) -> Queue:
         if src is None:
-          return self._h2d_channels[self.to_1d(dst)]
+            return self._h2d_channels[self.to_1d(dst)]
         elif dst is None:
-          return self._d2h_channels[self.to_1d(src)]
+            return self._d2h_channels[self.to_1d(src)]
         else:
-          return self._d2d_channels[self.to_1d(src)][self.to_1d(dst)]
+            return self._d2d_channels[self.to_1d(src)][self.to_1d(dst)]
 
-    def send(self, src: Optional[MeshIndex], dst: Optional[MeshIndex], data: Any) -> None:
+    def send(self, src: Optional[MeshIndex], dst: Optional[MeshIndex],
+             data: Any) -> None:
         self.get_channel(src, dst).put(data)
 
-    def receive(self, src: Optional[MeshIndex], dst: Optional[MeshIndex]) -> Any:
+    def receive(self, src: Optional[MeshIndex],
+                dst: Optional[MeshIndex]) -> Any:
         return self.get_channel(src, dst).get()
 
 
@@ -67,7 +70,7 @@ class VirtualDevice:
     def all_scatter(self, shard: np.ndarray,
                     group_id_fn: GroupIDFnType) -> None:
         print(f'AllScatter request at {self._index}')
-        
+
         # In practice, should do in parallel instead of using loops.
         src = self._index
         group_id = group_id_fn(self._index)
@@ -92,8 +95,8 @@ class VirtualDevice:
         gathered = []
         dst = self._index
         group_id = group_id_fn(self._index)
-        for dst in self._mesh:
-            if group_id != group_id_fn(dst):
+        for src in self._mesh:
+            if group_id != group_id_fn(src):
                 continue
             if src == dst:
                 gathered.append(shard)
@@ -114,8 +117,8 @@ class VirtualDevice:
         reduced = shard
         dst = self._index
         group_id = group_id_fn(self._index)
-        for dst in self._mesh:
-            if group_id != group_id_fn(dst):
+        for src in self._mesh:
+            if group_id != group_id_fn(src):
                 continue
             if src == dst:
                 continue
@@ -128,13 +131,40 @@ class VirtualDevice:
 
 def run_op_with_shared_inputs(op, device_, channels):
     index = device_.index
-    print(f'Getting inputs on {device_.index}')
+    print(f'Getting inputs on {device_}')
     # Use the special channel as client->worker communication
     inputs = channels.receive(None, index)
-    print(f'Running op on {device_.index}')
+    print(f'Running op on {device_}')
     outputs = device_.run(op, *inputs)
-    print(f'Sending output on {device_.index}')
+    print(f'Sending output on {device_}')
     channels.send(index, None, outputs)
+
+
+def format_slices(slices: Sequence[slice]) -> str:
+    assert all(s.step is None for s in slices)
+    return ', '.join(f'{s.start}:{s.stop}' for s in slices)
+
+
+def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
+                 shardings: Sequence[TensorSharding]) -> Sequence[np.ndarray]:
+    shards = []
+    for i, (tensor, tensor_sharding) in enumerate(zip(tensors, shardings)):
+        assert tensor.ndim == len(tensor_sharding.dim_shards)
+        slices = []
+        for dim, dim_sharding in zip(tensor.shape, tensor_sharding.dim_shards):
+            assert dim % dim_sharding.num_shards == 0
+            shard_size_0 = dim // dim_sharding.num_shards
+            shard_size_1 = shard_size_0 // dim_sharding.x_shard
+            # When the mesh can hold more than shards, duplicates happens.
+            start = (index.x * shard_size_0 + index.y * shard_size_1) % dim
+            stop = start + shard_size_1
+            slices.append(slice(start, stop))
+        # YAPF crashed if using tensor[*slices]
+        print(f'Device: {index} get shared input {i}: '
+              f'[{format_slices(slices)}]')
+        shards.append(tensor.__getitem__(tuple(slices)))
+        # shards = tensor[*slices]
+    return shards
 
 
 # Virtual device clusters.
@@ -148,46 +178,21 @@ class VirtualCluster:
                           channels=self._channels) for index in self._mesh
         ]
 
-    def run(self, op: Op,
-            tensor_and_sharding: Sequence[Tuple[np.ndarray, TensorSharding]]):
-        def format_slices(slices: Sequence[slice]) -> str:
-          assert all(s.step is None for s in slices)
-          return ', '.join(f'{s.start}:{s.stop}' for s in slices)
-        def shard_inputs(index: MeshIndex) -> Sequence[np.ndarray]:
-            shards = []
-            for i, (tensor, tensor_sharding) in enumerate(tensor_and_sharding):
-                assert tensor.ndim == len(tensor_sharding.dim_shards)
-                slices = []
-                for dim, dim_sharding in zip(tensor.shape,
-                                             tensor_sharding.dim_shards):
-                    assert dim % dim_sharding.num_shards == 0
-                    shard_size_0 = dim // dim_sharding.num_shards
-                    shard_size_1 = shard_size_0 // dim_sharding.y_shard
-                    # When the mesh can hold more than shards, duplicates happens.
-                    start = (index.x * shard_size_0 +
-                             index.y * shard_size_1) % dim
-                    stop = start + shard_size_1
-                    slices.append(slice(start, stop))
-                # YAPF crashed if using tensor[*slices]
-                print(f'Device: {index} get shared input {i}: '
-                      f'[{format_slices(slices)}]')
-                shards.append(tensor.__getitem__(tuple(slices)))
-                # shards = tensor[*slices]
-            return shards
-
+    def run(self, op: Op, tensors: Sequence[np.ndarray],
+            shardings: Sequence[TensorSharding]):
         processes = [
             Process(target=run_op_with_shared_inputs,
-                    args=(op, d, self._channels))
-            for d in self._devices
+                    args=(op, d, self._channels)) for d in self._devices
         ]
-        
+
         for p in processes:
             p.start()
 
         start = time.time()
         # Send inputs
         for index in self._mesh:
-            self._channels.send(None, index, shard_inputs(index)) 
+            self._channels.send(None, index,
+                                shard_inputs(index, tensors, shardings))
 
         # Receive outputs
         outputs = []

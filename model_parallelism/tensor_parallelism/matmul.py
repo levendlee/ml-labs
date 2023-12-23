@@ -32,7 +32,7 @@ class InnerShardedMatMul(Op):
                  device: VirtualDevice) -> np.ndarray:
 
         c = np.matmul(a, b)
-        
+
         print(f'Virtual device ({device}) ran matmul '
               f'{a.shape} @ {b.shape} -> {c.shape}!')
 

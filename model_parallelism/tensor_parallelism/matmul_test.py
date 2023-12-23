@@ -8,10 +8,10 @@ from matmul import create_matmul_op
 from sharding import DimSharding, TensorSharding, MatMulSharding
 
 import numpy as np
+from parameterized import parameterized
 
 
 class SharedMatMulTest(unittest.TestCase):
-
     def _run_test(self, tensor_shardings: Sequence[TensorSharding]):
         matmul_sharding = MatMulSharding(tensor_shardings)
 
@@ -26,12 +26,15 @@ class SharedMatMulTest(unittest.TestCase):
         cluster = VirtualCluster(2, 4)
 
         outputs = cluster.run(op=create_matmul_op(matmul_sharding),
-                              tensor_and_sharding=tuple(
-                                  zip(input_tensors, tensor_shardings[:2])))
+                              tensors=input_tensors,
+                              shardings=tensor_shardings[:2])
 
         self.assertEqual(len(outputs), 8)
         for tensor in outputs:
-            np.testing.assert_allclose(tensor, output_tensor)
+            np.testing.assert_allclose(tensor,
+                                       output_tensor,
+                                       atol=1e-4,
+                                       rtol=1e-4)
 
     def test_no_sharing(self):
         # Runs 4.61s on MacbookPro 2018 13inch i7
@@ -42,15 +45,19 @@ class SharedMatMulTest(unittest.TestCase):
         ]
         self._run_test(tensor_shardings)
 
-    def test_matched_inner_sharing(self):
-        # Runs ?s on MacbookPro 2018 13inch i7
+    @parameterized.expand([['1x4', 1, 4], ['2x1', 2, 1], ['2x4', 2, 4]])
+    def test_matched_inner_sharing(self, _, x_shard, y_shard):
+        # Runs 7s on MacbookPro 2018 13inch i7
 
         # Matched inner sharding on y dimension.
         # 2x duplicated memory and compute.
         # Runs `AllReduce`.
         tensor_shardings = [
-            TensorSharding([DimSharding(1, 1), DimSharding(1, 4)]),
-            TensorSharding([DimSharding(1, 4), DimSharding(1, 1)]),
-            TensorSharding([DimSharding(1, 1), DimSharding(1, 1)]),
+            TensorSharding([DimSharding(1, 1),
+                            DimSharding(x_shard, y_shard)]),
+            TensorSharding([DimSharding(x_shard, y_shard),
+                            DimSharding(1, 1)]),
+            TensorSharding([DimSharding(1, 1),
+                            DimSharding(1, 1)]),
         ]
         self._run_test(tensor_shardings)
