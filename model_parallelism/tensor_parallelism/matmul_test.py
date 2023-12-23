@@ -57,3 +57,21 @@ def test_matched_inner_sharding(x_shard, y_shard):
                         DimSharding(1, 1)]),
     ]
     _run_test(tensor_shardings)
+
+
+@pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
+def test_unmatched_inner_sharding(x_shard, y_shard):
+    # 1x4: Runs 4.19s on MacbookPro 2018 13inch i7
+    # 2x1: Runs 3.59s on MacbookPro 2018 13inch i7
+    # 2x4: Runs 7.10s on MacbookPro 2018 13inch i7
+
+    # Runs `AllReduce`.
+    tensor_shardings = [
+        TensorSharding([DimSharding(1, 1),
+                        DimSharding(1, y_shard)]),
+        TensorSharding([DimSharding(x_shard, 1),
+                        DimSharding(1, 1)]),
+        TensorSharding([DimSharding(1, 1),
+                        DimSharding(1, 1)]),
+    ]
+    _run_test(tensor_shardings)

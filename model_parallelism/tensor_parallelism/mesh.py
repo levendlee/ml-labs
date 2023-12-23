@@ -1,8 +1,9 @@
-"""Hardware mesh."""
+"""Hardware mesh.
+  
+Assumes 2D mesh.
+"""
 
 import dataclasses
-
-# 2D mesh setting.
 
 
 @dataclasses.dataclass

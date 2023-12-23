@@ -82,7 +82,7 @@ class VirtualDevice:
                 continue
             if group_id != group_id_fn(dst):
                 continue
-            self.log('Scatter %s to %s.', src, dst)
+            self.log('Scatter from %s to %s.', src, dst)
             self._channels.send(src=src, dst=dst, data=shard)
 
         self.log(f'AllScatter request finish.')
@@ -92,6 +92,8 @@ class VirtualDevice:
     def all_gather(
             self, shard: np.ndarray,
             group_id_fn: GroupIDFnType) -> Sequence[Sequence[np.ndarray]]:
+        self.log(f'AllGather request start.')
+
         # 1. Send out owned shard.
         self.all_scatter(shard, group_id_fn)
 
@@ -106,6 +108,7 @@ class VirtualDevice:
             if src == dst:
                 gathered.append(shard)
             else:
+                self.log('Gather from %s to %s', src, dst)
                 gathered.append(self._channels.receive(src=src, dst=dst))
         return gathered
 

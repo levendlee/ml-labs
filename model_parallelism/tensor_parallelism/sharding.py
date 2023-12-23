@@ -1,4 +1,7 @@
-"""Model sharding at various levels."""
+"""Model sharding at various levels.
+
+Assumes 2D mesh.
+"""
 
 import dataclasses
 from typing import Sequence, Tuple
