@@ -6,14 +6,16 @@
 import dataclasses
 import enum
 import functools
-from typing import Any, Callable, Mapping
+from typing import Callable, Mapping
 
 import numpy as np
 
 from device import VirtualDevice
-from mesh import MeshIndex
 from op import Op
-from sharding import Sharding, DimSharding, TensorSharding
+from sharding import DimSharding, Sharding, TensorSharding
+from utils import *
+
+Tensor = np.ndarray
 
 
 class MatMulShardingPolicy(enum.Enum):
@@ -66,34 +68,23 @@ class MatMulSharding(Sharding):
                 return MatMulShardingPolicy.FullSharding
 
 
-# Group id functions.
-def dim_sharding_group_id_fn(sharding: DimSharding,
-                             index: MeshIndex) -> tuple[int, int]:
-    return (index.x // sharding.x_shard), (index.y // sharding.y_shard)
-
-
-# Reduce functions.
-def add_fn(a: Any, b: Any) -> Any:
-    return a + b
-
-
 # Statistics functions.
-def update_flops(a: np.ndarray, b: np.ndarray, device: VirtualDevice):
+def update_flops(a: Tensor, b: Tensor, device: VirtualDevice):
     m, k = a.shape
     _, n = b.shape
     device.stats.flops += 2 * m * k * n
 
 
 # Matmul functions.
-def unshared_matmul(a: np.ndarray, b: np.ndarray, *, device: VirtualDevice,
-                    sharding: MatMulSharding) -> np.ndarray:
+def unshared_matmul(a: Tensor, b: Tensor, *, device: VirtualDevice,
+                    sharding: MatMulSharding) -> Tensor:
     update_flops(a, b, device)
     return np.matmul(a, b)
 
 
-def matched_inner_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
+def matched_inner_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
                                   device: VirtualDevice,
-                                  sharding: MatMulSharding) -> np.ndarray:
+                                  sharding: MatMulSharding) -> Tensor:
     """Matmul with matched inner sharding.
     A: (full, sharded)
     B: (sharded, full)
@@ -115,12 +106,12 @@ def matched_inner_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
     return device.all_reduce(c_shard,
                              reduce_fn=add_fn,
                              group_id_fn=functools.partial(
-                                 dim_sharding_group_id_fn, inner_sharding))
+                                 get_dim_sharding_group, inner_sharding))
 
 
-def unmatched_inner_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray,
-                                    *, device: VirtualDevice,
-                                    sharding: MatMulSharding) -> np.ndarray:
+def unmatched_inner_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
+                                    device: VirtualDevice,
+                                    sharding: MatMulSharding) -> Tensor:
     """Matmul with unmatched inner sharding.
     A: (full, sharded_Y)
     B: (sharded_X, full)
@@ -131,11 +122,11 @@ def unmatched_inner_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray,
 
     a_shards = device.all_gather(a_shard,
                                  group_id_fn=functools.partial(
-                                     dim_sharding_group_id_fn,
+                                     get_dim_sharding_group,
                                      sharding.a_shards[1]))
     b_shards = device.all_gather(b_shard,
                                  group_id_fn=functools.partial(
-                                     dim_sharding_group_id_fn,
+                                     get_dim_sharding_group,
                                      sharding.b_shards[0]))
 
     a = np.concatenate(a_shards, axis=1)
@@ -148,9 +139,9 @@ def unmatched_inner_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray,
     return c
 
 
-def outer_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
+def outer_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
                           device: VirtualDevice,
-                          sharding: MatMulSharding) -> np.ndarray:
+                          sharding: MatMulSharding) -> Tensor:
     """Matmul with outer sharding.
     A: (sharded_X, sharded_Y)
     B: (sharded_X, full)
@@ -162,11 +153,11 @@ def outer_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
 
     a_m_shards = device.all_gather(a_shard,
                                    group_id_fn=functools.partial(
-                                       dim_sharding_group_id_fn,
+                                       get_dim_sharding_group,
                                        sharding.a_shards[1]))
     b_shards = device.all_gather(b_shard,
                                  group_id_fn=functools.partial(
-                                     dim_sharding_group_id_fn,
+                                     get_dim_sharding_group,
                                      sharding.b_shards[0]))
 
     a_m_shard = np.concatenate(a_m_shards, axis=1)
@@ -179,14 +170,14 @@ def outer_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
 
     c_m_shards = device.all_gather(c_m_shard,
                                    group_id_fn=functools.partial(
-                                       dim_sharding_group_id_fn,
+                                       get_dim_sharding_group,
                                        sharding.a_shards[0]))
     return np.concatenate(c_m_shards, axis=0)
 
 
-def fully_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
+def fully_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
                           device: VirtualDevice,
-                          sharding: MatMulSharding) -> np.ndarray:
+                          sharding: MatMulSharding) -> Tensor:
     """Matmul with outer sharding.
     A: (sharded_X, sharded_Y)
     B: (sharded_X, sharded_Y)
@@ -198,11 +189,11 @@ def fully_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
 
     a_m_shards = device.all_gather(a_shard,
                                    group_id_fn=functools.partial(
-                                       dim_sharding_group_id_fn,
+                                       get_dim_sharding_group,
                                        sharding.a_shards[1]))
     b_n_shards = device.all_gather(b_shard,
                                    group_id_fn=functools.partial(
-                                       dim_sharding_group_id_fn,
+                                       get_dim_sharding_group,
                                        sharding.b_shards[0]))
 
     a_m_shard = np.concatenate(a_m_shards, axis=1)
@@ -232,24 +223,29 @@ def fully_sharding_matmul(a_shard: np.ndarray, b_shard: np.ndarray, *,
 
 
 class MatMul(Op):
-    """Matmul without sharding."""
+    """Matrix multiplication."""
 
-    dispatch: Mapping[
-        MatMulShardingPolicy,
-        Callable[[np.ndarray, np.ndarray, VirtualDevice, MatMulSharding], np.ndarray]] = {
-            MatMulShardingPolicy.Unshared: unshared_matmul,
-            MatMulShardingPolicy.MatchedInnerSharding:
-            matched_inner_sharding_matmul,
-            MatMulShardingPolicy.UnmatchedInnerSharding:
-            unmatched_inner_sharding_matmul,
-            MatMulShardingPolicy.OuterSharding: outer_sharding_matmul,
-            MatMulShardingPolicy.FullSharding: fully_sharding_matmul
-        }
+    dispatch: Mapping[MatMulShardingPolicy,
+                      Callable[[Tensor, Tensor, VirtualDevice, MatMulSharding],
+                               Tensor]] = {
+                                   MatMulShardingPolicy.Unshared:
+                                   unshared_matmul,
+                                   MatMulShardingPolicy.MatchedInnerSharding:
+                                   matched_inner_sharding_matmul,
+                                   MatMulShardingPolicy.UnmatchedInnerSharding:
+                                   unmatched_inner_sharding_matmul,
+                                   MatMulShardingPolicy.OuterSharding:
+                                   outer_sharding_matmul,
+                                   MatMulShardingPolicy.FullSharding:
+                                   fully_sharding_matmul
+                               }
 
     def __str__(self):
         return f'{self.__class__.__name__}({self._sharding.policy})'
 
-    def __call__(self, a_shard: np.ndarray, b_shard: np.ndarray, *,
-                 device: VirtualDevice) -> np.ndarray:
-        return self.dispatch[self._sharding.policy](a_shard, b_shard, device=device,
-                                              sharding=self._sharding)
+    def __call__(self, a_shard: Tensor, b_shard: Tensor, *,
+                 device: VirtualDevice) -> Tensor:
+        return self.dispatch[self._sharding.policy](a_shard,
+                                                    b_shard,
+                                                    device=device,
+                                                    sharding=self._sharding)

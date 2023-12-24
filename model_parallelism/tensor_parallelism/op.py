@@ -6,7 +6,6 @@ from sharding import Sharding
 
 
 class Op(metaclass=abc.ABCMeta):
-
     def __init__(self, sharding: Sharding) -> None:
         self._sharding = sharding
 

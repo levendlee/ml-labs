@@ -1,4 +1,4 @@
-"""Tests on shared matrix multiplication."""
+"""Tests on sharded matrix multiplication."""
 
 from typing import Sequence
 

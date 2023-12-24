@@ -12,10 +12,14 @@ import numpy as np
 from mesh import Mesh, MeshIndex
 from op import Op
 from sharding import TensorSharding
+from utils import *
+
+Tensor = np.ndarray
 
 # To determine the group id to run the collective ops on.
 GroupIDFnType = Callable[[MeshIndex], Any]
-ReduceFnType = Callable[[np.ndarray, np.ndarray], np.ndarray]
+ReduceFnType = Callable[[Tensor, Tensor], Tensor]
+ShardFnType = Callable[[Tensor, MeshIndex], Tensor]
 
 
 class Statistics:
@@ -76,8 +80,7 @@ class VirtualChannels:
                 dst: Optional[MeshIndex]) -> Any:
         data = self.get_channel(src, dst).get()
         data_bytes = np.sum([
-            arr.size * arr.itemsize for arr in data
-            if isinstance(arr, np.ndarray)
+            arr.size * arr.itemsize for arr in data if isinstance(arr, Tensor)
         ])
         if src is None and dst is not None:
             self._stats.h2d_times += 1
@@ -115,8 +118,7 @@ class VirtualDevice:
     def run(self, op: Op, *args, **kwargs):
         return op(*args, **kwargs, device=self)
 
-    def all_scatter(self, shard: np.ndarray,
-                    group_id_fn: GroupIDFnType) -> None:
+    def all_scatter(self, shard: Tensor, group_id_fn: GroupIDFnType) -> None:
         self.log(f'AllScatter request start.')
 
         # In practice, should do in parallel instead of using loops.
@@ -134,9 +136,8 @@ class VirtualDevice:
 
     # Scatter is used to implement gather, as the Queue works in a push mode
     # instead of a pull mode.
-    def all_gather(
-            self, shard: np.ndarray,
-            group_id_fn: GroupIDFnType) -> Sequence[Sequence[np.ndarray]]:
+    def all_gather(self, shard: Tensor,
+                   group_id_fn: GroupIDFnType) -> Sequence[Sequence[Tensor]]:
         self.log(f'AllGather request start.')
 
         # 1. Send out owned shard.
@@ -159,8 +160,8 @@ class VirtualDevice:
 
     # Scatter is used to implement reduce, as the Queue works in a push mode
     # instead of a pull mode.
-    def all_reduce(self, shard: np.ndarray, reduce_fn: ReduceFnType,
-                   group_id_fn: GroupIDFnType) -> np.ndarray:
+    def all_reduce(self, shard: Tensor, reduce_fn: ReduceFnType,
+                   group_id_fn: GroupIDFnType) -> Tensor:
         self.log(f'AllReduce request start.')
 
         # 1. Send out owned shard.
@@ -180,6 +181,36 @@ class VirtualDevice:
                                 self._channels.receive(src=src, dst=dst))
 
         self.log(f'AllReduce request finish.')
+        return reduced
+
+    def reduce_scatter(self, shard: Tensor, shard_fn: ShardFnType,
+                       reduce_fn: ReduceFnType,
+                       group_id_fn: GroupIDFnType) -> Tensor:
+        self.log(f'ReduceScatter request start.')
+
+        group_id = group_id_fn(self._index)
+
+        src = self._index
+        for dst in self._mesh:
+            if src == dst:
+                continue
+            if group_id != group_id_fn(dst):
+                continue
+            self.log('Scatter from %s to %s.', src, dst)
+            self._channels.send(src=src, dst=dst, data=shard_fn(shard, dst))
+
+        dst = self._index
+        reduced = shard_fn(shard, self._index)
+        for src in self._mesh:
+            if src == dst:
+                continue
+            if group_id != group_id_fn(src):
+                continue
+            self.log('Reduce from %s to %s.', src, dst)
+            reduced = reduce_fn(reduced,
+                                self._channels.receive(src=src, dst=dst))
+
+        self.log(f'ReduceScatter request finish.')
         return reduced
 
 
@@ -217,8 +248,8 @@ def format_slices(slices: Sequence[slice]) -> str:
     return ', '.join(f'{s.start}:{s.stop}' for s in slices)
 
 
-def format_arrays(arrays: Sequence[np.ndarray] | np.ndarray) -> str:
-    if isinstance(arrays, np.ndarray):
+def format_arrays(arrays: Sequence[Tensor] | Tensor) -> str:
+    if isinstance(arrays, Tensor):
         arrays = [arrays]
     return ', '.join(map(lambda a: str(a.shape), arrays))
 
@@ -236,23 +267,14 @@ def run_op_with_shared_inputs(op, device, channels, logger_queue):
     channels.send(index, None, [outputs, device.stats, channels.stats])
 
 
-def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
-                 shardings: Sequence[TensorSharding]) -> Sequence[np.ndarray]:
+def shard_inputs(index: MeshIndex, tensors: Sequence[Tensor],
+                 shardings: Sequence[TensorSharding]) -> Sequence[Tensor]:
+    assert len(tensors) == len(shardings)
     shards = []
     for i, (tensor, tensor_sharding) in enumerate(zip(tensors, shardings)):
-        assert tensor.ndim == len(tensor_sharding.dim_shards)
-        slices = []
-        for dim, dim_sharding in zip(tensor.shape, tensor_sharding.dim_shards):
-            assert dim % dim_sharding.num_shards == 0
-            shard_size = dim // dim_sharding.num_shards
-            shard_index = (index.x %
-                           dim_sharding.x_shard) * dim_sharding.y_shard + (
-                               index.y % dim_sharding.y_shard)
-            # When the mesh is not sharded along a dimension, duplicates
-            # happens.
-            start = shard_index * shard_size
-            stop = start + shard_size
-            slices.append(slice(start, stop))
+        slices = get_tensor_sharding_slices(tensor_sharding=tensor_sharding,
+                                            tensor=tensor,
+                                            index=index)
         # YAPF crashed if using tensor[*slices]
         logging.info(f'Device: {index} get shared input {i}: '
                      f'[{format_slices(slices)}]')
@@ -277,7 +299,11 @@ class VirtualCluster:
     def __del__(self):
         self._logger_queue_listener.stop()
 
-    def run(self, op: Op, tensors: Sequence[np.ndarray],
+    @property
+    def mesh(self) -> Mesh:
+        return self._mesh
+
+    def run(self, op: Op, tensors: Sequence[Tensor],
             shardings: Sequence[TensorSharding]):
 
         processes = [
