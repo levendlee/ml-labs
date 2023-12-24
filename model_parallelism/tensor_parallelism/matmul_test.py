@@ -9,8 +9,9 @@ from device import VirtualCluster
 from matmul import create_matmul_op
 from sharding import DimSharding, MatMulSharding, TensorSharding
 
+np.random.seed(2023)
 
-def _run_test(tensor_shardings: Sequence[TensorSharding]):
+def _run_test(tensor_shardings: Sequence[TensorSharding], atol=1e-6, rtol=1e-6):
     matmul_sharding = MatMulSharding(tensor_shardings)
 
     m, k, n = 4096, 2048, 4096
@@ -29,7 +30,7 @@ def _run_test(tensor_shardings: Sequence[TensorSharding]):
 
     assert len(outputs) == 8
     for tensor in outputs:
-        np.testing.assert_allclose(tensor, output_tensor, atol=1e-4, rtol=1e-4)
+        np.testing.assert_allclose(tensor, output_tensor, atol=atol, rtol=rtol)
 
 
 def test_no_sharding():
@@ -66,7 +67,7 @@ def test_matched_inner_sharding(x_shard, y_shard):
         TensorSharding([DimSharding(1, 1),
                         DimSharding(1, 1)]),
     ]
-    _run_test(tensor_shardings)
+    _run_test(tensor_shardings, atol=1e-4, rtol=1e-4)
 
 
 @pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
@@ -84,13 +85,17 @@ def test_unmatched_inner_sharding(x_shard, y_shard):
         TensorSharding([DimSharding(1, 1),
                         DimSharding(1, 1)]),
     ]
-    _run_test(tensor_shardings)
+    _run_test(tensor_shardings, atol=1e-4, rtol=1e-4)
+
 
 @pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
 def test_outer_sharding(x_shard, y_shard):
     # A: (sharded_X, sharded_Y)
     # B: (sharded_X, full)
-    # 2x4: Runs 4.39s on MacbookPro 2018 13inch i7
+    # 2x4:
+    # 2023-12-23 18:51:40 [    INFO] End to end time: 3.6520490646362305 (device.py:309)
+    # 2023-12-23 18:51:40 [    INFO] Compute: DeviceStatistics(flops=274,877,906,944) (device.py:314)
+    # 2023-12-23 18:51:40 [    INFO] Network: ChannelStatistics(h2d_times=8, h2d_bytes=167,772,160, d2d_times=40, d2d_bytes=503,316,480) (device.py:315)
 
     # Runs `AllGather`.
     tensor_shardings = [
@@ -101,14 +106,17 @@ def test_outer_sharding(x_shard, y_shard):
         TensorSharding([DimSharding(1, 1),
                         DimSharding(1, 1)]),
     ]
-    _run_test(tensor_shardings)
+    _run_test(tensor_shardings, atol=1e-4, rtol=1e-4)
+
 
 @pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
 def test_full_sharding(x_shard, y_shard):
     # A: (sharded_X, sharded_Y)
     # B: (sharded_X, sharded_Y)
-    # 2x4: Runs 4.39s on MacbookPro 2018 13inch i7
-
+    # 2x4: 
+    # 2023-12-23 19:07:45 [    INFO] End to end time: 4.085105895996094 (device.py:309)
+    # 2023-12-23 19:07:45 [    INFO] Compute: DeviceStatistics(flops=68,719,476,736) (device.py:314)
+    # 2023-12-23 19:07:45 [    INFO] Network: ChannelStatistics(h2d_times=8, h2d_bytes=67,108,864, d2d_times=88, d2d_bytes=603,979,776) (device.py:315)
     # Runs `AllGather`.
     tensor_shardings = [
         TensorSharding([DimSharding(x_shard, 1),
@@ -118,4 +126,4 @@ def test_full_sharding(x_shard, y_shard):
         TensorSharding([DimSharding(1, 1),
                         DimSharding(1, 1)]),
     ]
-    _run_test(tensor_shardings)
+    _run_test(tensor_shardings, atol=1e-4, rtol=1e-4)

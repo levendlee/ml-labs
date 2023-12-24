@@ -136,7 +136,7 @@ class OuterShardingMatMul(Op):
         c_m_shards = device.all_gather(c_m_shard,
                                        group_id_fn=functools.partial(
                                            dim_sharding_group_id_fn,
-                                           self._sharding.a_shards[1]))
+                                           self._sharding.a_shards[0]))
         return np.concatenate(c_m_shards, axis=0)
 
 
@@ -171,16 +171,19 @@ class FullyShardingMatMul(Op):
 
         c_mn_shards = device.all_gather(
             c_mn_shard,
-            group_id_fn=functools.partial(
-                ndim_sharding_group_id_fn,
-                (self._sharding.a_shards[0], self._sharding.b_shards[1])))
+            group_id_fn=lambda index: 0)
 
         num_m_shards = self._sharding.a_shards[0].num_shards
         num_n_shards = self._sharding.b_shards[1].num_shards
-        assert len(c_mn_shards) == num_m_shards * num_n_shards
+        if len(c_mn_shards) != num_m_shards * num_n_shards:
+            raise RuntimeError(
+                f'Expect to gather {num_m_shards} * {num_n_shards} = '
+                f'{num_m_shards * num_n_shards}. '
+                f'Actually gathered {len(c_mn_shards)} shards!'
+            )
 
         c_m_shards = [
-            np.concatenate(c_mn_shards[start:start + num_n_shards], axis=1)
+            np.concatenate(c_mn_shards[start * num_n_shards:start * num_n_shards + num_n_shards], axis=1)
             for start in range(num_m_shards)
         ]
         return np.concatenate(c_m_shards, axis=0)
