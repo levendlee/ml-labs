@@ -71,7 +71,7 @@ def test_matched_inner_sharding(x_shard, y_shard):
 
 @pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
 def test_unmatched_inner_sharding(x_shard, y_shard):
-    # 2x4: Runs 7.10s on MacbookPro 2018 13inch i7
+    # 2x4: Runs 4.39s on MacbookPro 2018 13inch i7
     # 2023-12-23 16:23:43 [    INFO] Compute: DeviceStatistics(flops=549,755,813,888) (device.py:310)
     # 2023-12-23 16:23:43 [    INFO] Network: ChannelStatistics(h2d_times=8, h2d_bytes=201,326,592, d2d_times=32, d2d_bytes=335,544,320) (device.py:311)
 
@@ -81,6 +81,40 @@ def test_unmatched_inner_sharding(x_shard, y_shard):
                         DimSharding(1, y_shard)]),
         TensorSharding([DimSharding(x_shard, 1),
                         DimSharding(1, 1)]),
+        TensorSharding([DimSharding(1, 1),
+                        DimSharding(1, 1)]),
+    ]
+    _run_test(tensor_shardings)
+
+@pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
+def test_outer_sharding(x_shard, y_shard):
+    # A: (sharded_X, sharded_Y)
+    # B: (sharded_X, full)
+    # 2x4: Runs 4.39s on MacbookPro 2018 13inch i7
+
+    # Runs `AllGather`.
+    tensor_shardings = [
+        TensorSharding([DimSharding(x_shard, 1),
+                        DimSharding(1, y_shard)]),
+        TensorSharding([DimSharding(x_shard, 1),
+                        DimSharding(1, 1)]),
+        TensorSharding([DimSharding(1, 1),
+                        DimSharding(1, 1)]),
+    ]
+    _run_test(tensor_shardings)
+
+@pytest.mark.parametrize(['x_shard', 'y_shard'], [(2, 4)])
+def test_full_sharding(x_shard, y_shard):
+    # A: (sharded_X, sharded_Y)
+    # B: (sharded_X, sharded_Y)
+    # 2x4: Runs 4.39s on MacbookPro 2018 13inch i7
+
+    # Runs `AllGather`.
+    tensor_shardings = [
+        TensorSharding([DimSharding(x_shard, 1),
+                        DimSharding(1, y_shard)]),
+        TensorSharding([DimSharding(x_shard, 1),
+                        DimSharding(1, y_shard)]),
         TensorSharding([DimSharding(1, 1),
                         DimSharding(1, 1)]),
     ]
