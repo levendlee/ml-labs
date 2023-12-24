@@ -6,12 +6,15 @@ import numpy as np
 import pytest
 
 from device import VirtualCluster
-from matmul import create_matmul_op
-from sharding import DimSharding, MatMulSharding, TensorSharding
+from matmul import MatMul, MatMulSharding
+from sharding import DimSharding, TensorSharding
 
 np.random.seed(2023)
 
-def _run_test(tensor_shardings: Sequence[TensorSharding], atol=1e-6, rtol=1e-6):
+
+def _run_test(tensor_shardings: Sequence[TensorSharding],
+              atol=1e-6,
+              rtol=1e-6):
     matmul_sharding = MatMulSharding(tensor_shardings)
 
     m, k, n = 4096, 2048, 4096
@@ -24,7 +27,7 @@ def _run_test(tensor_shardings: Sequence[TensorSharding], atol=1e-6, rtol=1e-6):
     # 2x4 mesh. 8 devices.
     cluster = VirtualCluster(2, 4)
 
-    outputs = cluster.run(op=create_matmul_op(matmul_sharding),
+    outputs = cluster.run(op=MatMul(matmul_sharding),
                           tensors=input_tensors,
                           shardings=tensor_shardings[:2])
 
@@ -113,7 +116,7 @@ def test_outer_sharding(x_shard, y_shard):
 def test_full_sharding(x_shard, y_shard):
     # A: (sharded_X, sharded_Y)
     # B: (sharded_X, sharded_Y)
-    # 2x4: 
+    # 2x4:
     # 2023-12-23 19:07:45 [    INFO] End to end time: 4.085105895996094 (device.py:309)
     # 2023-12-23 19:07:45 [    INFO] Compute: DeviceStatistics(flops=68,719,476,736) (device.py:314)
     # 2023-12-23 19:07:45 [    INFO] Network: ChannelStatistics(h2d_times=8, h2d_bytes=67,108,864, d2d_times=88, d2d_bytes=603,979,776) (device.py:315)
