@@ -13,10 +13,17 @@ from op import Op
 from sharding import DimSharding, MatMulSharding
 
 
+def update_flops(a: np.ndarray, b: np.ndarray, device: VirtualDevice):
+    m, k = a.shape
+    _, n = b.shape
+    device.stats.flops += 2 * m * k * n
+
+
 class UnsharedMatMul(Op):
     """Matmul without sharding."""
     def __call__(self, a: np.ndarray, b: np.ndarray, *,
                  device: VirtualDevice) -> np.ndarray:
+        update_flops(a, b, device)
         return np.matmul(a, b)
 
 
@@ -40,6 +47,7 @@ class MatchedInnerShardedMatMul(Op):
         # 2. Get unsharded output.
         # 2. Reduce.
 
+        update_flops(a, b, device)
         c = np.matmul(a, b)
 
         device.log('Virtual device (%s) ran matmul %s @ %s -> %s!', device,
@@ -70,8 +78,7 @@ class UnmatchedInnerShardedMatMul(Op):
 
         full_a = np.concatenate(a_shards, axis=1)
         full_b = np.concatenate(b_shards, axis=0)
-        device.log('Virtual device (%s) ran matmul %s @ %s -> ?!', device,
-                   full_a.shape, full_b.shape)
+        update_flops(full_a, full_b, device)
         full_c = np.matmul(full_a, full_b)
 
         device.log('Virtual device (%s) ran matmul %s @ %s -> %s!', device,

@@ -1,5 +1,6 @@
 """Virtual compute cluster."""
 
+import dataclasses
 import logging
 import time
 from logging.handlers import QueueHandler, QueueListener
@@ -17,6 +18,28 @@ GroupIDFnType = Callable[[MeshIndex], Any]
 ReduceFnType = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
 
+class Statistics:
+    def __add__(self, other):
+        cls = type(self)
+        assert type(self) == type(other)
+        lhs = dataclasses.asdict(self)
+        rhs = dataclasses.asdict(other)
+        return cls(**{k: lhs[k] + rhs[k] for k in lhs})
+
+
+@dataclasses.dataclass
+class ChannelStatistics(Statistics):
+    h2d_times: int = 0
+    h2d_bytes: int = 0
+    d2d_times: int = 0
+    d2d_bytes: int = 0
+
+
+@dataclasses.dataclass
+class DeviceStatistics(Statistics):
+    flops: int = 0
+
+
 # Virtual intra-device communication channels.
 class VirtualChannels:
     def __init__(self, mesh: Mesh):
@@ -26,6 +49,11 @@ class VirtualChannels:
         self._d2h_channels = [Queue() for _ in range(num_devices)]
         self._d2d_channels = [[Queue() for _ in range(num_devices)]
                               for _ in range(num_devices)]
+        self._stats = ChannelStatistics()
+
+    @property
+    def stats(self) -> ChannelStatistics:
+        return self._stats
 
     def to_1d(self, index: MeshIndex) -> int:
         return index.x * self._mesh.y_dim + index.y
@@ -33,6 +61,7 @@ class VirtualChannels:
     def get_channel(self, src: Optional[MeshIndex],
                     dst: Optional[MeshIndex]) -> Queue:
         if src is None:
+            assert dst is not None
             return self._h2d_channels[self.to_1d(dst)]
         elif dst is None:
             return self._d2h_channels[self.to_1d(src)]
@@ -45,7 +74,18 @@ class VirtualChannels:
 
     def receive(self, src: Optional[MeshIndex],
                 dst: Optional[MeshIndex]) -> Any:
-        return self.get_channel(src, dst).get()
+        data = self.get_channel(src, dst).get()
+        data_bytes = np.sum([
+            arr.size * arr.itemsize for arr in data
+            if isinstance(arr, np.ndarray)
+        ])
+        if src is None and dst is not None:
+            self._stats.h2d_times += 1
+            self._stats.h2d_bytes += data_bytes
+        elif src is not None and dst is not None:
+            self._stats.d2d_times += 1
+            self._stats.d2d_bytes += data_bytes
+        return data
 
 
 # Virtual devices.
@@ -55,10 +95,15 @@ class VirtualDevice:
         self._mesh = mesh
         self._index = index
         self._channels = channels
+        self._stats = DeviceStatistics()
 
     @property
     def index(self) -> MeshIndex:
         return self._index
+
+    @property
+    def stats(self) -> DeviceStatistics:
+        return self._stats
 
     def log(self, fmt, *args):
         prefix = f'{self}: '
@@ -188,7 +233,7 @@ def run_op_with_shared_inputs(op, device, channels, logger_queue):
     device.log('Running op %s!', op)
     outputs = device.run(op, *inputs)
     device.log('Sending outputs %s!', format_arrays(outputs))
-    channels.send(index, None, outputs)
+    channels.send(index, None, [outputs, device.stats, channels.stats])
 
 
 def shard_inputs(index: MeshIndex, tensors: Sequence[np.ndarray],
@@ -252,13 +297,21 @@ class VirtualCluster:
 
         # Receive outputs
         outputs = []
+        device_stats = []
+        channel_stats = []
         for index in self._mesh:
-            outputs.append(self._channels.receive(index, None))
+            o, ds, cs = self._channels.receive(index, None)
+            outputs.append(o)
+            device_stats.append(ds)
+            channel_stats.append(cs)
         end = time.time()
 
         logging.info(f'End to end time: {end - start}')
 
         for p in processes:
             p.join()
+
+        logging.info(f'Compute: %s', sum(device_stats, DeviceStatistics()))
+        logging.info(f'Network: %s', sum(channel_stats, ChannelStatistics()))
 
         return outputs
