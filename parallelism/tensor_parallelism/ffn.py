@@ -10,10 +10,10 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from device import VirtualDevice
-from op import Op
-from sharding import DimSharding, Sharding, TensorSharding
-from utils import *
+from model_parallelism.cluster import VirtualDevice
+from model_parallelism.op import Op
+from model_parallelism.sharding import DimSharding, Sharding, TensorSharding
+from model_parallelism.utils import *
 
 Tensor = np.ndarray
 

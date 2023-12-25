@@ -4,8 +4,8 @@ from typing import Any
 
 import numpy as np
 
-from mesh import MeshIndex
-from sharding import DimSharding, TensorSharding
+from model_parallelism.mesh import MeshIndex
+from model_parallelism.sharding import DimSharding, TensorSharding
 
 __all__ = [
     'add_fn',

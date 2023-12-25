@@ -9,10 +9,10 @@ from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 
-from mesh import Mesh, MeshIndex
-from op import Op
-from sharding import TensorSharding
-from utils import *
+from model_parallelism.mesh import Mesh, MeshIndex
+from model_parallelism.op import Op
+from model_parallelism.sharding import TensorSharding
+from model_parallelism.utils import *
 
 Tensor = np.ndarray
 

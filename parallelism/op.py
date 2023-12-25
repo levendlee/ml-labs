@@ -2,7 +2,7 @@
 
 import abc
 
-from sharding import Sharding
+from model_parallelism.sharding import Sharding
 
 
 class Op(metaclass=abc.ABCMeta):

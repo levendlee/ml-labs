@@ -5,10 +5,11 @@ from typing import Sequence
 import numpy as np
 import pytest
 
-from device import VirtualCluster
-from ffn import Feedforward, FeedforwardSharding
-from sharding import DimSharding, TensorSharding
-from utils import *
+from model_parallelism.cluster import VirtualCluster
+from model_parallelism.sharding import DimSharding, TensorSharding
+from model_parallelism.tensor_parallelism.ffn import (Feedforward,
+                                                      FeedforwardSharding)
+from model_parallelism.utils import *
 
 np.random.seed(2023)
 
