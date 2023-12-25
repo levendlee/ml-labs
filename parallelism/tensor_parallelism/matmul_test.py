@@ -28,8 +28,8 @@ def _run_test(tensor_shardings: Sequence[TensorSharding],
     cluster = VirtualCluster(2, 4)
 
     outputs = cluster.run(op=MatMul(matmul_sharding),
-                          tensors=input_tensors,
-                          shardings=tensor_shardings[:2])
+                          activations=(input_tensors[0], ),
+                          parameters=(input_tensors[1], ))
 
     assert len(outputs) == 8
     for tensor in outputs:

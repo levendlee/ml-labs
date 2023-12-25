@@ -40,17 +40,14 @@ def _run_test(tensor_shardings: Sequence[TensorSharding],
     cluster = VirtualCluster(2, 4)
 
     outputs = cluster.run(op=Feedforward(ffn_sharding),
-                          tensors=input_tensors,
-                          shardings=[
-                              x1_sharding, w1_sharding, b1_sharding,
-                              w2_sharding, b2_sharding
-                          ])
+                          activations=(x1, ),
+                          parameters=(w1, b1, w2, b2))
 
     assert len(outputs) == 8
-    for index, tensor in zip(cluster.mesh, outputs):
-        expected_tensor = shard_tensor(tensor_sharding=o_sharding,
-                                       tensor=output_tensor,
-                                       index=index)
+    expected_tensors = shard_output_tensor(sharding=o_sharding,
+                                           tensor=output_tensor,
+                                           indices=tuple(cluster.mesh))
+    for tensor, expected_tensor in zip(outputs, expected_tensors):
         np.testing.assert_allclose(tensor,
                                    expected_tensor,
                                    atol=atol,

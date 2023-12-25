@@ -6,12 +6,12 @@
 import dataclasses
 import enum
 import functools
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
 from parallelism.cluster import VirtualDevice
-from parallelism.operation import Operation
+from parallelism.operation import ShardedOperation
 from parallelism.sharding import DimSharding, Sharding, TensorSharding
 from parallelism.utils import *
 
@@ -77,7 +77,7 @@ def update_flops(a: Tensor, b: Tensor, device: VirtualDevice):
 
 # Matmul functions.
 def unsharded_matmul(a: Tensor, b: Tensor, *, device: VirtualDevice,
-                    sharding: MatMulSharding) -> Tensor:
+                     sharding: MatMulSharding) -> Tensor:
     update_flops(a, b, device)
     return np.matmul(a, b)
 
@@ -222,30 +222,35 @@ def fully_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
     return np.concatenate(c_m_shards, axis=0)
 
 
-class MatMul(Operation):
+class MatMul(ShardedOperation):
     """Matrix multiplication."""
 
-    dispatch: Mapping[MatMulShardingPolicy,
-                      Callable[[Tensor, Tensor, VirtualDevice, MatMulSharding],
-                               Tensor]] = {
-                                   MatMulShardingPolicy.Unsharded:
-                                   unsharded_matmul,
-                                   MatMulShardingPolicy.MatchedInnerSharding:
-                                   matched_inner_sharding_matmul,
-                                   MatMulShardingPolicy.UnmatchedInnerSharding:
-                                   unmatched_inner_sharding_matmul,
-                                   MatMulShardingPolicy.OuterSharding:
-                                   outer_sharding_matmul,
-                                   MatMulShardingPolicy.FullSharding:
-                                   fully_sharding_matmul
-                               }
+    dispatch_dict: Mapping[MatMulShardingPolicy, Callable[
+        [Tensor, Tensor, VirtualDevice, MatMulSharding], Tensor]] = {
+            MatMulShardingPolicy.Unsharded: unsharded_matmul,
+            MatMulShardingPolicy.MatchedInnerSharding:
+            matched_inner_sharding_matmul,
+            MatMulShardingPolicy.UnmatchedInnerSharding:
+            unmatched_inner_sharding_matmul,
+            MatMulShardingPolicy.OuterSharding: outer_sharding_matmul,
+            MatMulShardingPolicy.FullSharding: fully_sharding_matmul
+        }
+
+    @classmethod
+    def dispatch(cls, sharding: MatMulSharding) -> Callable[..., Tensor]:
+        return cls.dispatch_dict[sharding.policy]
 
     def __str__(self):
         return f'{self.__class__.__name__}({self._sharding.policy})'
 
-    def __call__(self, a_shard: Tensor, b_shard: Tensor, *,
-                 device: VirtualDevice) -> Tensor:
-        return self.dispatch[self._sharding.policy](a_shard,
-                                                    b_shard,
-                                                    device=device,
-                                                    sharding=self._sharding)
+    @property
+    def sharding(self) -> MatMulSharding:
+        return self._sharding
+
+    @property
+    def activation_shardings(self) -> Sequence[TensorSharding]:
+        return (self.sharding.a_shards, )
+
+    @property
+    def parameter_shardings(self) -> Sequence[TensorSharding]:
+        return (self.sharding.b_shards, )

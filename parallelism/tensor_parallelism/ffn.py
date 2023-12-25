@@ -6,12 +6,12 @@
 import dataclasses
 import enum
 import functools
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
 from parallelism.cluster import VirtualDevice
-from parallelism.operation import Operation
+from parallelism.operation import ShardedOperation
 from parallelism.sharding import DimSharding, Sharding, TensorSharding
 from parallelism.utils import *
 
@@ -165,10 +165,10 @@ def unsupported_ffn(*args, sharding: FeedforwardShardingPolicy,
     raise NotImplementedError(f'Unsupported policy: {sharding}!')
 
 
-class Feedforward(Operation):
+class Feedforward(ShardedOperation):
     """Multihead Feedforward."""
 
-    dispatch: Mapping[FeedforwardShardingPolicy, Callable[
+    dispatch_dict: Mapping[FeedforwardShardingPolicy, Callable[
         [np.ndarray, np.ndarray, VirtualDevice, FeedforwardSharding],
         np.ndarray]] = {
             FeedforwardShardingPolicy.Unsharded: unsharded_ffn,
@@ -176,16 +176,22 @@ class Feedforward(Operation):
             FeedforwardShardingPolicy.Unsupported: unsupported_ffn
         }
 
+    @classmethod
+    def dispatch(cls, sharding: FeedforwardSharding) -> Callable[..., Tensor]:
+        return cls.dispatch_dict[sharding.policy]
+
     def __str__(self):
         return f'{self.__class__.__name__}({self._sharding.policy})'
 
-    def __call__(self, x1_shard: Tensor, w1_shard: Tensor, b1_shard: Tensor,
-                 w2_shard: Tensor, b2_shard: Tensor, *,
-                 device: VirtualDevice) -> Tensor:
-        return self.dispatch[self._sharding.policy](x1_shard,
-                                                    w1_shard,
-                                                    b1_shard,
-                                                    w2_shard,
-                                                    b2_shard,
-                                                    device=device,
-                                                    sharding=self._sharding)
+    @property
+    def sharding(self) -> FeedforwardSharding:
+        return self._sharding
+
+    @property
+    def activation_shardings(self) -> Sequence[TensorSharding]:
+        return (self.sharding.x1_shards, )
+
+    @property
+    def parameter_shardings(self) -> Sequence[TensorSharding]:
+        return (self.sharding.w1_shards, self.sharding.b1_shards,
+                self.sharding.w2_shards, self.sharding.b2_shards)

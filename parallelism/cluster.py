@@ -11,8 +11,6 @@ import numpy as np
 
 from parallelism.mesh import Mesh, MeshIndex
 from parallelism.operation import Operation
-from parallelism.sharding import TensorSharding
-from parallelism.utils import *
 
 Tensor = np.ndarray
 
@@ -105,6 +103,10 @@ class VirtualDevice:
         return self._index
 
     @property
+    def channels(self) -> VirtualChannels:
+        return self._channels
+
+    @property
     def stats(self) -> DeviceStatistics:
         return self._stats
 
@@ -115,8 +117,14 @@ class VirtualDevice:
     def __str__(self) -> str:
         return f'VirtualDevice({self._index})'
 
-    def run(self, op: Operation, *args, **kwargs):
-        return op(*args, **kwargs, device=self)
+    def run(self, op: Operation):
+        return op(device=self)
+
+    def memcpy_h2d(self) -> Tensor:
+        return self._channels.receive(src=None, dst=self._index)
+
+    def memcpy_d2h(self, data: Tensor) -> None:
+        self._channels.send(src=self._index, dst=None, data=data)
 
     def all_scatter(self, shard: Tensor, group_id_fn: GroupIDFnType) -> None:
         self.log(f'AllScatter request start.')
@@ -243,44 +251,9 @@ def init_queue_handler(q: Queue):
     logger.addHandler(queue_handler)
 
 
-def format_slices(slices: Sequence[slice]) -> str:
-    assert all(s.step is None for s in slices)
-    return ', '.join(f'{s.start}:{s.stop}' for s in slices)
-
-
-def format_arrays(arrays: Sequence[Tensor] | Tensor) -> str:
-    if isinstance(arrays, Tensor):
-        arrays = [arrays]
-    return ', '.join(map(lambda a: str(a.shape), arrays))
-
-
-def run_op_with_sharded_inputs(op, device, channels, logger_queue):
+def run_op(op, device, channels, logger_queue):
     init_queue_handler(logger_queue)
-
-    index = device.index
-    # Use the special channel as client->worker communication
-    device.log('Getting inputs!')
-    inputs = channels.receive(None, index)
-    device.log('Running op %s!', op)
-    outputs = device.run(op, *inputs)
-    device.log('Sending outputs %s!', format_arrays(outputs))
-    channels.send(index, None, [outputs, device.stats, channels.stats])
-
-
-def shard_inputs(index: MeshIndex, tensors: Sequence[Tensor],
-                 shardings: Sequence[TensorSharding]) -> Sequence[Tensor]:
-    assert len(tensors) == len(shardings)
-    shards = []
-    for i, (tensor, tensor_sharding) in enumerate(zip(tensors, shardings)):
-        slices = get_tensor_sharding_slices(tensor_sharding=tensor_sharding,
-                                            tensor=tensor,
-                                            index=index)
-        # YAPF crashed if using tensor[*slices]
-        logging.info(f'Device: {index} get sharded input {i}: '
-                     f'[{format_slices(slices)}]')
-        shards.append(tensor.__getitem__(tuple(slices)))
-        # shards = tensor[*slices]
-    return shards
+    device.run(op)
 
 
 # Virtual device clusters.
@@ -303,11 +276,15 @@ class VirtualCluster:
     def mesh(self) -> Mesh:
         return self._mesh
 
-    def run(self, op: Operation, tensors: Sequence[Tensor],
-            shardings: Sequence[TensorSharding]):
+    def run(
+        self,
+        op: Operation,
+        activations: Sequence[Tensor],
+        parameters: Sequence[Tensor],
+    ):
 
         processes = [
-            Process(target=run_op_with_sharded_inputs,
+            Process(target=run_op,
                     args=(op, d, self._channels, self._logger_queue))
             for d in self._devices
         ]
@@ -318,8 +295,11 @@ class VirtualCluster:
         start = time.time()
         # Send inputs
         for index in self._mesh:
-            self._channels.send(None, index,
-                                shard_inputs(index, tensors, shardings))
+            packets = op.prepare_h2d(activations=activations,
+                                     parameters=parameters,
+                                     index=index)
+            for p in packets:
+                self._channels.send(None, index, p)
 
         # Receive outputs
         outputs = []
