@@ -5,9 +5,9 @@ from typing import Sequence
 import numpy as np
 import pytest
 
-from model_parallelism.cluster import VirtualCluster
-from model_parallelism.sharding import DimSharding, TensorSharding
-from model_parallelism.tensor_parallelism.matmul import MatMul, MatMulSharding
+from parallelism.cluster import VirtualCluster
+from parallelism.sharding import DimSharding, TensorSharding
+from parallelism.tensor_parallelism.matmul import MatMul, MatMulSharding
 
 np.random.seed(2023)
 

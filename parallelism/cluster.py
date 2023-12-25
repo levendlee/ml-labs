@@ -9,10 +9,10 @@ from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 
-from model_parallelism.mesh import Mesh, MeshIndex
-from model_parallelism.op import Op
-from model_parallelism.sharding import TensorSharding
-from model_parallelism.utils import *
+from parallelism.mesh import Mesh, MeshIndex
+from parallelism.operation import Operation
+from parallelism.sharding import TensorSharding
+from parallelism.utils import *
 
 Tensor = np.ndarray
 
@@ -115,7 +115,7 @@ class VirtualDevice:
     def __str__(self) -> str:
         return f'VirtualDevice({self._index})'
 
-    def run(self, op: Op, *args, **kwargs):
+    def run(self, op: Operation, *args, **kwargs):
         return op(*args, **kwargs, device=self)
 
     def all_scatter(self, shard: Tensor, group_id_fn: GroupIDFnType) -> None:
@@ -254,7 +254,7 @@ def format_arrays(arrays: Sequence[Tensor] | Tensor) -> str:
     return ', '.join(map(lambda a: str(a.shape), arrays))
 
 
-def run_op_with_shared_inputs(op, device, channels, logger_queue):
+def run_op_with_sharded_inputs(op, device, channels, logger_queue):
     init_queue_handler(logger_queue)
 
     index = device.index
@@ -276,7 +276,7 @@ def shard_inputs(index: MeshIndex, tensors: Sequence[Tensor],
                                             tensor=tensor,
                                             index=index)
         # YAPF crashed if using tensor[*slices]
-        logging.info(f'Device: {index} get shared input {i}: '
+        logging.info(f'Device: {index} get sharded input {i}: '
                      f'[{format_slices(slices)}]')
         shards.append(tensor.__getitem__(tuple(slices)))
         # shards = tensor[*slices]
@@ -303,11 +303,11 @@ class VirtualCluster:
     def mesh(self) -> Mesh:
         return self._mesh
 
-    def run(self, op: Op, tensors: Sequence[Tensor],
+    def run(self, op: Operation, tensors: Sequence[Tensor],
             shardings: Sequence[TensorSharding]):
 
         processes = [
-            Process(target=run_op_with_shared_inputs,
+            Process(target=run_op_with_sharded_inputs,
                     args=(op, d, self._channels, self._logger_queue))
             for d in self._devices
         ]

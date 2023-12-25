@@ -10,10 +10,10 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from model_parallelism.cluster import VirtualDevice
-from model_parallelism.op import Op
-from model_parallelism.sharding import DimSharding, Sharding, TensorSharding
-from model_parallelism.utils import *
+from parallelism.cluster import VirtualDevice
+from parallelism.operation import Operation
+from parallelism.sharding import DimSharding, Sharding, TensorSharding
+from parallelism.utils import *
 
 Tensor = np.ndarray
 
@@ -165,7 +165,7 @@ def unsupported_ffn(*args, sharding: FeedforwardShardingPolicy,
     raise NotImplementedError(f'Unsupported policy: {sharding}!')
 
 
-class Feedforward(Op):
+class Feedforward(Operation):
     """Multihead Feedforward."""
 
     dispatch: Mapping[FeedforwardShardingPolicy, Callable[

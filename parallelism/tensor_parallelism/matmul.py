@@ -10,16 +10,16 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from model_parallelism.cluster import VirtualDevice
-from model_parallelism.op import Op
-from model_parallelism.sharding import DimSharding, Sharding, TensorSharding
-from model_parallelism.utils import *
+from parallelism.cluster import VirtualDevice
+from parallelism.operation import Operation
+from parallelism.sharding import DimSharding, Sharding, TensorSharding
+from parallelism.utils import *
 
 Tensor = np.ndarray
 
 
 class MatMulShardingPolicy(enum.Enum):
-    Unshared = 1
+    Unsharded = 1
     MatchedInnerSharding = 2
     UnmatchedInnerSharding = 3
     OuterSharding = 4
@@ -55,7 +55,7 @@ class MatMulSharding(Sharding):
     @property
     def policy(self) -> MatMulShardingPolicy:
         if self.full:
-            return MatMulShardingPolicy.Unshared
+            return MatMulShardingPolicy.Unsharded
         elif self.inner_sharding:
             if self.a_shards[1] == self.b_shards[0]:
                 return MatMulShardingPolicy.MatchedInnerSharding
@@ -76,7 +76,7 @@ def update_flops(a: Tensor, b: Tensor, device: VirtualDevice):
 
 
 # Matmul functions.
-def unshared_matmul(a: Tensor, b: Tensor, *, device: VirtualDevice,
+def unsharded_matmul(a: Tensor, b: Tensor, *, device: VirtualDevice,
                     sharding: MatMulSharding) -> Tensor:
     update_flops(a, b, device)
     return np.matmul(a, b)
@@ -93,7 +93,7 @@ def matched_inner_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
         raise NotImplementedError('Inconsistent inner sharding not supported!')
     inner_sharding: DimSharding = sharding.a_shards[1]
 
-    # 1. Run matmul on shared inputs.
+    # 1. Run matmul on sharded inputs.
     # 2. Get unsharded output.
     # 2. Reduce.
 
@@ -222,14 +222,14 @@ def fully_sharding_matmul(a_shard: Tensor, b_shard: Tensor, *,
     return np.concatenate(c_m_shards, axis=0)
 
 
-class MatMul(Op):
+class MatMul(Operation):
     """Matrix multiplication."""
 
     dispatch: Mapping[MatMulShardingPolicy,
                       Callable[[Tensor, Tensor, VirtualDevice, MatMulSharding],
                                Tensor]] = {
-                                   MatMulShardingPolicy.Unshared:
-                                   unshared_matmul,
+                                   MatMulShardingPolicy.Unsharded:
+                                   unsharded_matmul,
                                    MatMulShardingPolicy.MatchedInnerSharding:
                                    matched_inner_sharding_matmul,
                                    MatMulShardingPolicy.UnmatchedInnerSharding:

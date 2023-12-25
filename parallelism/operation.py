@@ -2,10 +2,10 @@
 
 import abc
 
-from model_parallelism.sharding import Sharding
+from parallelism.sharding import Sharding
 
 
-class Op(metaclass=abc.ABCMeta):
+class Operation(metaclass=abc.ABCMeta):
     def __init__(self, sharding: Sharding) -> None:
         self._sharding = sharding
 
