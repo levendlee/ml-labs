@@ -27,13 +27,18 @@ class Pipeline:
     def __getitem__(self, i: int) -> 'PipelineStage':
         return self.stages[i]
 
+    @property
+    def num_cycles(self):
+        return 2 * (self.num_runs + self.num_stages - 1)
+
 
 @dataclasses.dataclass
 class PipelineStage:
     mesh_index: Mesh
     pipeline: Pipeline
     pipeline_index: int
-    # Each stage keeps its own copy of cycle to avoid synchronization.
+    # Each stage keeps its own copy of cycle to avoid synchronization. Other
+    # devices cannot know which cycle this device is running at.
     _pipeline_cycle: int = 0
 
     def __enter__(self, *args, **kwargs):
@@ -69,7 +74,7 @@ class PipelineStage:
 
     @property
     def backward(self) -> bool:
-        start_cycle = 2 * self.pipeline.num_runs - self.pipeline_index - 1
+        start_cycle = 2 * (self.pipeline.num_runs - 1) - self.pipeline_index
         return (self.pipeline_cycle >= start_cycle) and (
             self.pipeline_cycle < start_cycle + self.pipeline.num_runs)
 
@@ -87,8 +92,12 @@ class PipelineStage:
         raise ValueError(f'Stage {self} is idle!')
 
     @property
-    def first_run(self) -> bool:
+    def first_cycle(self) -> bool:
         return self.pipeline_cycle == 0
+
+    @property
+    def last_cycle(self) -> bool:
+        return self.pipeline_cycle == self.pipeline.num_cycles - 1
 
     @property
     def first_stage(self) -> bool:

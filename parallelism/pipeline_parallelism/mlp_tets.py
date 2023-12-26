@@ -18,6 +18,7 @@ from parallelism.pipelining import Pipeline
 
 Tensor = np.ndarray
 
+
 class Model(nn.Module):
     units: Sequence[int]
 

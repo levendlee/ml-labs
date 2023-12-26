@@ -102,7 +102,7 @@ def batching(num_batches: int,
             assert t.shape[0] % num_batches == 0
             batch_size = t.shape[0] // num_batches
             slices = [slice(i * batch_size, i * batch_size + batch_size)
-                      ] + [None for _ in range(1, t.ndim)]
+                      ] + [slice(d) for d in t.shape[1:]]
             batch.append(t.__getitem__(tuple(slices)))
         batched.append(batch)
     return batched

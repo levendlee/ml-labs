@@ -80,12 +80,13 @@ class VirtualChannels:
         data_bytes = np.sum([
             arr.size * arr.itemsize for arr in data if isinstance(arr, Tensor)
         ])
-        if src is None and dst is not None:
-            self._stats.h2d_times += 1
-            self._stats.h2d_bytes += data_bytes
-        elif src is not None and dst is not None:
-            self._stats.d2d_times += 1
-            self._stats.d2d_bytes += data_bytes
+        if data_bytes:  # Excludes metadata communication
+            if src is None and dst is not None:
+                self._stats.h2d_times += 1
+                self._stats.h2d_bytes += data_bytes
+            elif src is not None and dst is not None:
+                self._stats.d2d_times += 1
+                self._stats.d2d_bytes += data_bytes
         return data
 
 
@@ -298,7 +299,8 @@ class VirtualCluster:
         start = time.time()
         # Send inputs
         for index in self._mesh:
-            packets = op.prepare_h2d(*args, **kwargs, index=index)
+            packets = op.preprocess_h2d(*args, **kwargs, index=index)
+            logging.info(f'Sending %s packets to %s', len(packets), index)
             for p in packets:
                 self._channels.send(None, index, p)
 
@@ -307,10 +309,15 @@ class VirtualCluster:
         device_stats = []
         channel_stats = []
         for index in self._mesh:
-            o, ds, cs = self._channels.receive(index, None)
-            outputs.append(o)
-            device_stats.append(ds)
-            channel_stats.append(cs)
+            num_packets = op.num_d2d_requests(index)
+            logging.info(f'Getting %s packets from %s', num_packets, index)
+            for i in range(op.num_d2d_requests(index)):
+                logging.info(f'Got %s st packets from %s', i, index)
+                outputs.append(self._channels.receive(index, None)[0])
+            logging.info(f'Getting DeviceStatistics packets from %s', index)
+            device_stats.append(self._channels.receive(index, None)[0])
+            logging.info(f'Getting ChannelStatistics packets from %s', index)
+            channel_stats.append(self._channels.receive(index, None)[0])
         end = time.time()
 
         logging.info(f'End to end time: {end - start}')

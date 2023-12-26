@@ -36,32 +36,34 @@ class MLP(PipelinedOperation):
                                  loss_fn=loss_gradients)
 
 
-def dense_forward(op: PipelinedOperation, activations: Sequence[Tensor],
-                  parameters: Sequence[Tensor], *args, **kwargs) -> Tensor:
+def dense_forward(*, op: PipelinedOperation, activations: Sequence[Tensor],
+                  parameters: Sequence[Tensor], **kwargs) -> Tensor:
     x = activations[0]
     w, b = parameters
     return [np.maximum(np.matmul(x, w) + b, 0.0)]
 
 
-def loss_gradients(op: PipelinedOperation, activations: Sequence[Tensor],
-                   targets: Sequence[Tensor], *args, **kwargs) -> Tensor:
+def loss_gradients(*, op: PipelinedOperation, activations: Sequence[Tensor],
+                   targets: Sequence[Tensor], **kwargs) -> Tensor:
     y = activations[0]
     targets = targets[0]
-    dy = 2 * (y - targets) / y.size()
-    return np.where(y >= 0.0, dy, 0.0)
+    dy = 2 * (y - targets) / y.size
+    return [np.where(y >= 0.0, dy, 0.0)]
 
 
 # The backward path includes next layer relu.
-def dense_backward(op: PipelinedOperation, gradients: Sequence[Tensor],
+def dense_backward(*, op: PipelinedOperation, gradients: Sequence[Tensor],
                    activations: Sequence[Tensor], parameters: Sequence[Tensor],
-                   *args,
+                   stage: PipelineStage,
                    **kwargs) -> tuple[Sequence[Tensor], Sequence[Tensor]]:
+    assert len(gradients) == 1
     dy = gradients[0]
+    assert len(activations) == 1
     x = activations[0]
     w, b = parameters
     db = np.sum(dy, axis=0)
     dw = np.matmul(x.T, dy)
     dx = np.matmul(dy, w.T)
-    if not op._stage.first_stage:
+    if not stage.first_stage:
         dx = np.where(x >= 0.0, dx, 0.0)
     return [dx], [w - op._learning_rate * dw, b - op._learning_rate * db]
