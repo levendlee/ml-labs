@@ -88,7 +88,7 @@ class PipelineStage:
             return self.pipeline_cycle - self.pipeline_index
         if self.backward:
             return (self.pipeline_cycle -
-                    (2 * self.pipeline.num_runs - self.pipeline_index - 1))
+                    (2 * (self.pipeline.num_runs - 1) - self.pipeline_index))
         raise ValueError(f'Stage {self} is idle!')
 
     @property

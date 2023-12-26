@@ -4,6 +4,7 @@ from typing import Sequence
 
 import numpy as np
 
+from parallelism.cluster import VirtualDevice
 from parallelism.operation import PipelinedOperation, PipelineFunctions
 from parallelism.pipelining import Pipeline, PipelineStage
 
@@ -36,34 +37,48 @@ class MLP(PipelinedOperation):
                                  loss_fn=loss_gradients)
 
 
+def update_flops(a: Tensor, b: Tensor, device: VirtualDevice):
+    m, k = a.shape
+    _, n = b.shape
+    device.stats.flops += 2 * m * k * n
+
+
 def dense_forward(*, op: PipelinedOperation, activations: Sequence[Tensor],
-                  parameters: Sequence[Tensor], **kwargs) -> Tensor:
+                  parameters: Sequence[Tensor], device: VirtualDevice,
+                  **kwargs) -> Tensor:
     x = activations[0]
     w, b = parameters
-    return [np.maximum(np.matmul(x, w) + b, 0.0)]
+    update_flops(x, w, device=device)
+    y = np.matmul(x, w) + b
+    return [np.maximum(y, 0.0)], [x, y]
 
 
 def loss_gradients(*, op: PipelinedOperation, activations: Sequence[Tensor],
-                   targets: Sequence[Tensor], **kwargs) -> Tensor:
+                   targets: Sequence[Tensor],
+                   **kwargs) -> tuple[Tensor, float]:
     y = activations[0]
     targets = targets[0]
+    loss = np.sum((y - targets)**2) / y.size
     dy = 2 * (y - targets) / y.size
-    return [np.where(y >= 0.0, dy, 0.0)]
+    return [dy], loss
 
 
 # The backward path includes next layer relu.
 def dense_backward(*, op: PipelinedOperation, gradients: Sequence[Tensor],
-                   activations: Sequence[Tensor], parameters: Sequence[Tensor],
-                   stage: PipelineStage,
+                   states: Sequence[Tensor], parameters: Sequence[Tensor],
+                   stage: PipelineStage, device: VirtualDevice,
                    **kwargs) -> tuple[Sequence[Tensor], Sequence[Tensor]]:
     assert len(gradients) == 1
-    dy = gradients[0]
-    assert len(activations) == 1
-    x = activations[0]
+    dz = gradients[0]
+    x, y = states
     w, b = parameters
+
+    dy = np.where(y >= 0.0, dz, 0.0)
     db = np.sum(dy, axis=0)
+    device.log('Stage: %s. db max: %f, min: %f', stage, np.max(db), np.min(db))
+    update_flops(x.T, dy, device=device)
     dw = np.matmul(x.T, dy)
+    device.log('Stage: %s. dw max: %f, min: %f', stage, np.max(dw), np.min(dw))
+    update_flops(dy, w.T, device=device)
     dx = np.matmul(dy, w.T)
-    if not stage.first_stage:
-        dx = np.where(x >= 0.0, dx, 0.0)
     return [dx], [w - op._learning_rate * dw, b - op._learning_rate * db]

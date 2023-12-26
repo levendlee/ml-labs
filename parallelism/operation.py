@@ -45,9 +45,9 @@ class ShardedOperation(Operation):
                            sharding=self._sharding)
 
         device.log('Sending outputs %s!', format_arrays(outputs))
-        device.memcpy_d2h(outputs)
-        device.memcpy_d2h(device.stats)
-        device.memcpy_d2h(device.channels.stats)
+        device.memcpy_d2h([outputs])
+        device.memcpy_d2h([device.stats])
+        device.memcpy_d2h([device.channels.stats])
 
     def preprocess_h2d(self, activations: Sequence[Tensor],
                        parameters: Sequence[Tensor],
@@ -92,7 +92,7 @@ class PipelinedOperation(Operation):
 
     def __init__(self, pipeline: Pipeline) -> None:
         self._pipeline = pipeline
-        self._activations = [[None] for _ in range(pipeline.num_runs)]
+        self._states = [[None] for _ in range(pipeline.num_runs)]
         self._parameters = [None]
         self._gradients = [[None] for _ in range(pipeline.num_runs)]
 
@@ -143,7 +143,7 @@ class PipelinedOperation(Operation):
     def report_memory(self, device):
         stage = self.get_stage(device.index)
 
-        arrays = itertools.chain(*self._activations, self._parameters,
+        arrays = itertools.chain(*self._states, self._parameters,
                                  *self._gradients)
         device.log(
             'Stage: %s consumes memory: %s MB', stage,
@@ -162,25 +162,28 @@ class PipelinedOperation(Operation):
                        stage - 1)
             activations = device.channels.receive(src=(stage - 1).mesh_index,
                                                   dst=stage.mesh_index)
-        # Cache activations.
-        self._activations[stage.current_run] = activations
         # device.log(f'Activations shape: {format_arrays(activations)}. '
         #            f'Parameters shape: {format_arrays(self._parameters)}. ')
-        output_activations = self._fns.fwd_fn(op=self,
-                                              activations=activations,
-                                              parameters=self._parameters,
-                                              device=device,
-                                              stage=stage)
+        output_activations, intermediate_states = self._fns.fwd_fn(
+            op=self,
+            activations=activations,
+            parameters=self._parameters,
+            device=device,
+            stage=stage)
+        # Cache activations.
+        self._states[stage.current_run] = intermediate_states
 
         if stage.last_stage:
             # Last stage -> Return gradients instead of activations.
             device.log('Stage: %s is getting targets from host!', stage)
             targets = device.memcpy_h2d()
-            gradients = self._fns.loss_fn(op=self,
-                                          activations=output_activations,
-                                          targets=targets,
-                                          device=device,
-                                          stage=stage)
+            gradients, loss = self._fns.loss_fn(op=self,
+                                                activations=output_activations,
+                                                targets=targets,
+                                                device=device,
+                                                stage=stage)
+            device.log('Stage: %s. Run: %s. Reports loss=%f.', stage,
+                       stage.current_run, loss)
             self._gradients[stage.current_run] = gradients
         else:
             device.log('Stage: %s is sending activations to %s!', stage,
@@ -195,28 +198,30 @@ class PipelinedOperation(Operation):
         if stage.last_stage:
             # Last stage -> Get gradients local cache
             gradients = self._gradients[stage.current_run]
+            device.log('Stage: %s. Run: %s. Gets local gradients back', stage,
+                       stage.current_run)
             self._gradients[stage.current_run] = [None]
         else:
             device.log('Stage: %s is getting gradients from %s!', stage,
                        stage + 1)
             gradients = device.channels.receive(src=(stage + 1).mesh_index,
                                                 dst=stage.mesh_index)
-        activations = self._activations[stage.current_run]
+        states = self._states[stage.current_run]
         # Invoke GC.
-        self._activations[stage.current_run] = [None]
+        self._states[stage.current_run] = [None]
         # device.log(f'Gradients shape: {format_arrays(gradients)}. '
         #            f'Activations shape: {format_arrays(activations)}. '
         #            f'Parameters shape: {format_arrays(self._parameters)}. ')
         output_gradients, self._parameters = self._fns.bwd_fn(
             op=self,
             gradients=gradients,
-            activations=activations,
+            states=states,
             parameters=self._parameters,
             device=device,
             stage=stage)
         if stage.first_stage:
             device.log('Stage: %s is sending gradients to host!', stage)
-            device.memcpy_d2h([output_gradients])
+            device.memcpy_d2h(output_gradients)
         else:
             # device.log(f'Gradients shape: {format_arrays(output_gradients)}')
             device.log('Stage: %s is sending gradients to %s!', stage,
