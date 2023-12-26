@@ -272,6 +272,9 @@ class VirtualCluster:
     def __del__(self):
         self._logger_queue_listener.stop()
 
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}({self._mesh})'
+
     @property
     def mesh(self) -> Mesh:
         return self._mesh
@@ -279,8 +282,8 @@ class VirtualCluster:
     def run(
         self,
         op: Operation,
-        activations: Sequence[Tensor],
-        parameters: Sequence[Tensor],
+        *args,
+        **kwargs,
     ):
 
         processes = [
@@ -295,9 +298,7 @@ class VirtualCluster:
         start = time.time()
         # Send inputs
         for index in self._mesh:
-            packets = op.prepare_h2d(activations=activations,
-                                     parameters=parameters,
-                                     index=index)
+            packets = op.prepare_h2d(*args, **kwargs, index=index)
             for p in packets:
                 self._channels.send(None, index, p)
 

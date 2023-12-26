@@ -10,6 +10,7 @@ from parallelism.sharding import DimSharding, TensorSharding
 
 __all__ = [
     'add_fn',
+    'batching',
     'format_arrays',
     'get_dim_sharding_group',
     'shard_tensor',
@@ -90,3 +91,18 @@ def shard_output_tensor(sharding: TensorSharding, tensor: Tensor,
         shards.append(
             shard_tensor(tensor_sharding=sharding, tensor=tensor, index=index))
     return shards
+
+
+def batching(num_batches: int,
+             tensors: Sequence[Tensor]) -> Sequence[Sequence[Tensor]]:
+    batched = []
+    for i in range(num_batches):
+        batch = []
+        for t in tensors:
+            assert t.shape[0] % num_batches == 0
+            batch_size = t.shape[0] // num_batches
+            slices = [slice(i * batch_size, i * batch_size + batch_size)
+                      ] + [None for _ in range(1, t.ndim)]
+            batch.append(t.__getitem__(tuple(slices)))
+        batched.append(batch)
+    return batched
